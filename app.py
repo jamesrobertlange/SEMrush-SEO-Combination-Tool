@@ -10,7 +10,7 @@ import base64
 # Set page config first
 st.set_page_config(page_title="SEMrush SEO Combo Tool by Jimmy Lange", layout="wide")
 
-# Updated CSS with more specific selectors
+# Updated CSS with execution button styling
 st.markdown("""
 <style>
     /* Style upload text like Settings */
@@ -83,6 +83,19 @@ st.markdown("""
         text-align: center;
         color: rgba(250, 250, 250, 0.6);
         margin: 2rem 0;
+    }
+
+    /* Execute Button Styling */
+    .execute-button {
+        margin: 2rem auto;
+        text-align: center;
+    }
+    
+    .execute-button button {
+        background-color: rgb(76, 175, 80) !important;
+        font-size: 1.2rem !important;
+        padding: 1rem 2rem !important;
+        min-width: 200px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -188,8 +201,21 @@ def convert_df_to_csv(df):
     """Convert dataframe to CSV string once"""
     return df.to_csv(index=False)
 
+def reset_app():
+    # Clear all the stored data
+    st.session_state.csv_strings = {
+        'combined': None,
+        'full_segment': None,
+        'partial_segment': None
+    }
+    # Clear any other session state variables you might have
+    if 'uploaded_files' in st.session_state:
+        del st.session_state.uploaded_files
+
 def main():
-    # Initialize session state for storing CSV strings
+    # Initialize session states
+    if 'executed' not in st.session_state:
+        st.session_state.executed = False
     if 'csv_strings' not in st.session_state:
         st.session_state.csv_strings = {
             'combined': None,
@@ -201,7 +227,17 @@ def main():
     st.markdown("# SEMrush Organic Position Combo Tool")
     st.markdown("created by [Jimmy Lange](https://jamesrobertlange.com)", unsafe_allow_html=True)
     
-    # Initialize these variables to None at the start
+    # Add segment explanation
+    st.markdown("""
+    This tool analyzes your SEMrush Organic Overview data, removes duplicates, and groups relevant data together for SEO analysis. 
+                
+    This is used to get over keyword limits to get full datasets. For instance, setting filters for Page 1 (under your SEMrush limit), and then for more Pages. Those CSVs then get combined in this tool for analysis elsewhere.
+    
+    A segment is the last meaningful part of your URL path (e.g., for '/blog/seo-tips', the segment is 'seo-tips').
+    This helps identify which sections of your site drive the most organic traffic.
+    """)
+
+    # Initialize variables
     top_pages_sem = None
     full_segment_analysis = None
     partial_segment_analysis = None
@@ -210,6 +246,12 @@ def main():
     with st.sidebar:
         st.header("Settings")
         
+        # Add reset button to sidebar
+        st.sidebar.markdown("### Reset Tool")
+        if st.sidebar.button("🔄 Reset All", type="primary"):
+            reset_app()
+            st.rerun()
+
         # File upload with size limit warning
         st.markdown("""
             ### Upload CSV Files
@@ -227,13 +269,15 @@ def main():
         )
         
         # Check file sizes
+        files_valid = True
         if uploaded_files:
             for file in uploaded_files:
                 file_size = file.size / (1024 * 1024)  # Convert to MB
                 if file_size > 200:
-                    st.error(f"⚠️ {file.name} is {file_size:.1f}MB. Files over 200MB may fail to process on Streamlit Community Cloud.")
+                    st.error(f"⚠️ {file.name} is {file_size:.1f}MB. Files over 200MB may fail to process.")
+                    files_valid = False
         
-        # Add segment toggle in sidebar
+
         st.sidebar.markdown("### Output Options")
         include_segments = st.sidebar.checkbox(
             "Include Segments in Combined Output",
@@ -253,7 +297,23 @@ def main():
         ).strip()
         branded_terms = branded_input.lower().split(',') if branded_input else []
 
+    # Execute button (only show if files are uploaded)
     if uploaded_files:
+        st.markdown('<div class="execute-button">', unsafe_allow_html=True)
+        execute_button = st.button("▶️ Execute Analysis", type="primary")
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        if execute_button and files_valid:
+            st.session_state.executed = True
+            
+        if not files_valid:
+            st.error("Please fix file size issues before executing.")
+    else:
+        st.info("Please upload CSV files to begin")
+        st.session_state.executed = False
+
+    # Only process if executed is True
+    if st.session_state.executed and files_valid:
         with st.spinner("Processing files..."):
             try:
                 # Process the files
@@ -371,8 +431,7 @@ def main():
 
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
-    else:
-        st.info("Please upload CSV files to begin processing")
+                st.session_state.executed = False
 
 if __name__ == "__main__":
     main()
