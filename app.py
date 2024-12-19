@@ -257,7 +257,6 @@ def main():
             ### Upload CSV Files
             
             ⚠️ **File Size Limits**
-            - Maximum file size: 200MB per file
             - Larger files may cause performance issues
         """)
         
