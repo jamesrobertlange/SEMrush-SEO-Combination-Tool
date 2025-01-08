@@ -227,16 +227,16 @@ def main():
     st.markdown("# SEMrush Organic Position Combo Tool")
     st.markdown("created by [Jimmy Lange](https://jamesrobertlange.com)", unsafe_allow_html=True)
     
-    # Add segment explanation
+    # Add explanation and video
     st.markdown("""
-    This tool analyzes your SEMrush Organic Overview data, removes duplicates, and groups relevant data together for SEO analysis. 
-                
-    This is used to get over keyword limits to get full datasets. For instance, setting filters for Page 1 (under your SEMrush limit), and then for more Pages. Those CSVs then get combined in this tool for analysis elsewhere.
-    
-    A segment is the last meaningful part of your URL path (e.g., for '/blog/seo-tips', the segment is 'seo-tips').
-    This helps identify which sections of your site drive the most organic traffic.
+    This tool combines and analyzes SEMrush Organic Overview data exports to overcome keyword limits. It groups URLs by their final segment (e.g., 'seo-tips' from '/blog/seo-tips') to analyze organic traffic patterns.
+
+    Watch the tutorial for detailed usage instructions:
     """)
 
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.video('https://www.youtube.com/watch?v=s0nKPfwsm6A')
     # Initialize variables
     top_pages_sem = None
     full_segment_analysis = None
