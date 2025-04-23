@@ -6,11 +6,12 @@ import json
 import io
 import zipfile
 import base64
+import re  # Add re import for regex operations
 
 # Set page config first
 st.set_page_config(page_title="SEMrush SEO Combo Tool by Jimmy Lange", layout="wide")
 
-# Updated CSS with execution button styling
+# Updated CSS with more specific selectors
 st.markdown("""
 <style>
     /* Style upload text like Settings */
@@ -84,18 +85,23 @@ st.markdown("""
         color: rgba(250, 250, 250, 0.6);
         margin: 2rem 0;
     }
-
-    /* Execute Button Styling */
-    .execute-button {
-        margin: 2rem auto;
-        text-align: center;
+    
+    /* Validation error styling */
+    .validation-warning {
+        background-color: #FF9800;
+        color: white;
+        padding: 1rem;
+        border-radius: 4px;
+        margin-bottom: 1rem;
     }
     
-    .execute-button button {
-        background-color: rgb(76, 175, 80) !important;
-        font-size: 1.2rem !important;
-        padding: 1rem 2rem !important;
-        min-width: 200px !important;
+    /* Process button styling */
+    .process-button {
+        background-color: #4CAF50 !important;
+        color: white !important;
+        font-weight: bold !important;
+        padding: 1rem !important;
+        margin-top: 1rem !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -124,6 +130,7 @@ def process_csv_files(uploaded_files, max_position, branded_terms, include_segme
     top_pages_sem = combined_df[combined_df["Position"] <= max_position]
     
     # Select and rename columns to lowercase with underscores
+    # Updated to include Trends and CPC
     column_mapping = {
         "Keyword": "keyword",
         "Position": "position",
@@ -131,27 +138,70 @@ def process_csv_files(uploaded_files, max_position, branded_terms, include_segme
         "Keyword Intents": "keyword_intents",
         "URL": "url",
         "Traffic": "traffic",
-        "Timestamp": "timestamp"
+        "Timestamp": "timestamp",
+        "CPC": "cpc",             # Added CPC
+        "Trends": "trends"        # Added Trends
     }
     
-    top_pages_sem = top_pages_sem[list(column_mapping.keys())].rename(columns=column_mapping)
+    # Check if the required columns exist in the DataFrame
+    available_columns = [col for col in column_mapping.keys() if col in top_pages_sem.columns]
+    
+    # Only use columns that actually exist in the data
+    top_pages_sem = top_pages_sem[available_columns].rename(columns={col: column_mapping[col] for col in available_columns})
     
     # Clean and process Traffic column and convert to integer
-    top_pages_sem.loc[:, 'traffic'] = top_pages_sem['traffic'].replace(',', '', regex=True).astype(int)
-    top_pages_sem = top_pages_sem.sort_values(by='traffic', ascending=False)
+    if 'traffic' in top_pages_sem.columns:
+        # Handle string values with commas and convert to numeric safely
+        top_pages_sem.loc[:, 'traffic'] = pd.to_numeric(
+            top_pages_sem['traffic'].astype(str).str.replace(',', '', regex=True),
+            errors='coerce'
+        ).fillna(0).astype('int64')
+        
+        # Sort by traffic
+        top_pages_sem = top_pages_sem.sort_values(by='traffic', ascending=False)
+    
+    # Process CPC - handle missing or different formats
+    if 'cpc' in top_pages_sem.columns:
+        # Replace empty strings with NaN and convert to float
+        top_pages_sem['cpc'] = pd.to_numeric(top_pages_sem['cpc'], errors='coerce')
+        # Fill NaN with 0
+        top_pages_sem['cpc'] = top_pages_sem['cpc'].fillna(0)
+    
+    # Process Trends - convert string representation of list to actual list if needed
+    if 'trends' in top_pages_sem.columns:
+        # Check if trends are in list format as string and convert to actual list
+        if top_pages_sem['trends'].dtype == 'object':
+            try:
+                # Try to convert string representation of list to actual list
+                top_pages_sem['trends'] = top_pages_sem['trends'].apply(
+                    lambda x: json.loads(x) if isinstance(x, str) and x.startswith('[') and x.endswith(']') else x
+                )
+            except:
+                # If conversion fails, keep as is
+                pass
     
     # Process timestamps
-    top_pages_sem['timestamp'] = pd.to_datetime(top_pages_sem['timestamp'], errors='coerce').dt.strftime('%Y-%m-%d')
-    top_pages_sem['month'] = pd.to_datetime(top_pages_sem['timestamp'], errors='coerce').dt.strftime('%Y-%m')
-    top_pages_sem['date'] = top_pages_sem['month'].astype(str) + "-11"
-    top_pages_sem = top_pages_sem.drop(['month', 'timestamp'], axis=1)
+    if 'timestamp' in top_pages_sem.columns:
+        top_pages_sem['timestamp'] = pd.to_datetime(top_pages_sem['timestamp'], errors='coerce').dt.strftime('%Y-%m-%d')
+        top_pages_sem['month'] = pd.to_datetime(top_pages_sem['timestamp'], errors='coerce').dt.strftime('%Y-%m')
+        top_pages_sem['date'] = top_pages_sem['month'].astype(str) + "-11"
+        top_pages_sem = top_pages_sem.drop(['month', 'timestamp'], axis=1)
 
     # Process branded keywords if provided
-    if branded_terms:
+    if branded_terms and 'keyword' in top_pages_sem.columns:
         def brandedKWS(series):
-            pattern = '|'.join(r'\b{}\b'.format(term.strip()) for term in branded_terms)
+            # Create a pattern that doesn't use match groups to avoid the warning
+            # Use word boundaries for more accurate matching
+            pattern = '|'.join(r'\b' + re.escape(term.strip()) + r'\b' for term in branded_terms)
             return series.str.lower().str.contains(pattern, na=False, regex=True)
+        
+        # Make sure we import re at the top of the file
         top_pages_sem["branded"] = brandedKWS(top_pages_sem["keyword"])
+        
+        # Log the number of branded keywords found
+        branded_count = top_pages_sem["branded"].sum()
+        st.session_state['branded_count'] = int(branded_count)
+        st.session_state['branded_terms_used'] = branded_terms
 
     # Create a copy for segment analysis
     analysis_df = top_pages_sem.copy()
@@ -161,39 +211,101 @@ def process_csv_files(uploaded_files, max_position, branded_terms, include_segme
     if include_segments:
         top_pages_sem['segment'] = analysis_df['segment']
     
-    # Calculate segment occurrences
-    segment_occurrences = analysis_df['segment'].value_counts()
+    # Calculate segment occurrences - this is where the problem is
+    # Instead of just counting, we need to count unique URLs per segment
+    segment_occurrences = analysis_df.groupby('segment')['url'].nunique()
 
     # Analyze segments
     def agg_keywords_and_urls(group):
-        sorted_group = group.sort_values('traffic', ascending=False)
-        keywords = sorted_group['keyword'].tolist()[:3]
-        urls = sorted_group['url'].tolist()[:3]
-        traffic_sum = group['traffic'].sum()
-        occurrences = segment_occurrences.get(group.name, 0)
+        # Get the segment name from the first row to avoid operating on grouping columns
+        segment_name = group['segment'].iloc[0] if 'segment' in group.columns else None
         
-        return pd.Series({
-            'traffic': traffic_sum,
-            'keyword': keywords,
-            'url': urls,
-            'occurrences': occurrences
-        }, name=group.name)
+        sorted_group = group.sort_values('traffic', ascending=False) if 'traffic' in group.columns else group
+        
+        # Basic aggregation
+        result = {
+            'occurrences': segment_occurrences.get(segment_name, 0)
+        }
+        
+        # Add traffic if it exists
+        if 'traffic' in group.columns:
+            result['traffic'] = group['traffic'].sum()
+        
+        # Add keywords if they exist
+        if 'keyword' in group.columns:
+            result['keyword'] = sorted_group['keyword'].tolist()[:3]
+        
+        # Add URLs if they exist
+        if 'url' in group.columns:
+            result['url'] = sorted_group['url'].tolist()[:3]
+        
+        # Add CPC if it exists
+        if 'cpc' in group.columns:
+            result['cpc'] = group['cpc'].mean()
+        
+        # Add trends data aggregation if it exists
+        if 'trends' in group.columns:
+            # Try to aggregate trends data, handling possible string representations
+            try:
+                # Extract valid trend lists and calculate average for each position
+                valid_trends = []
+                for trend in group['trends']:
+                    if isinstance(trend, list) and all(isinstance(x, (int, float)) for x in trend):
+                        valid_trends.append(trend)
+                
+                if valid_trends:
+                    # Calculate average trend for each position
+                    avg_trends = []
+                    for i in range(min(len(t) for t in valid_trends)):
+                        avg_trends.append(sum(t[i] for t in valid_trends if i < len(t)) / len(valid_trends))
+                    result['avg_trends'] = avg_trends
+            except:
+                # If aggregation fails, skip trends
+                pass
+        
+        return pd.Series(result)
 
-    segment_analysis = analysis_df.groupby('segment').apply(agg_keywords_and_urls).reset_index()
-    segment_analysis = segment_analysis.sort_values('traffic', ascending=False)
+    # Use include_groups=False to avoid the deprecation warning
+    segment_analysis = analysis_df.groupby('segment', as_index=False).apply(
+        agg_keywords_and_urls, include_groups=False
+    )
+    
+    # Sort by traffic if it exists, otherwise by occurrences
+    if 'traffic' in segment_analysis.columns:
+        segment_analysis = segment_analysis.sort_values('traffic', ascending=False)
+    else:
+        segment_analysis = segment_analysis.sort_values('occurrences', ascending=False)
 
-    # Create partial segment analysis
+    # Create partial segment analysis using the corrected occurrences values
     partial_segment_analysis = segment_analysis[
         (segment_analysis['occurrences'] > 5) & 
         (segment_analysis['occurrences'] <= 50)
     ]
 
-    # Format traffic values with commas
-    for df in [top_pages_sem, segment_analysis, partial_segment_analysis]:
+    # Format traffic values with commas - avoiding the FutureWarning
+    for i, df in enumerate([top_pages_sem, segment_analysis, partial_segment_analysis]):
         if 'traffic' in df.columns:
-            df_copy = df.copy()
-            df_copy.loc[:, 'traffic'] = df_copy['traffic'].apply(lambda x: f"{x:,}" if isinstance(x, (int, float)) else x)
-            df = df_copy
+            # Create a string representation of traffic in a new column to avoid type issues
+            df = df.copy()  # Create a copy to avoid SettingWithCopyWarning
+            # Convert to string first to handle any non-numeric values safely
+            df['traffic_formatted'] = df['traffic'].astype(str)
+            # Only format values that are numeric
+            numeric_mask = df['traffic'].apply(lambda x: pd.to_numeric(x, errors='coerce')).notna()
+            df.loc[numeric_mask, 'traffic_formatted'] = df.loc[numeric_mask, 'traffic'].apply(
+                lambda x: f"{int(float(x)):,}" if pd.notna(x) else "0"
+            )
+            # Store both columns - the original numeric for calculations and the formatted for display
+            df['traffic_original'] = df['traffic']
+            df['traffic'] = df['traffic_formatted']
+            df = df.drop('traffic_formatted', axis=1)
+            
+            # Reassign to the original variables
+            if i == 0:
+                top_pages_sem = df
+            elif i == 1:
+                segment_analysis = df
+            else:
+                partial_segment_analysis = df
 
     return top_pages_sem, segment_analysis, partial_segment_analysis
 
@@ -201,43 +313,29 @@ def convert_df_to_csv(df):
     """Convert dataframe to CSV string once"""
     return df.to_csv(index=False)
 
-def reset_app():
-    # Clear all the stored data
-    st.session_state.csv_strings = {
-        'combined': None,
-        'full_segment': None,
-        'partial_segment': None
-    }
-    # Clear any other session state variables you might have
-    if 'uploaded_files' in st.session_state:
-        del st.session_state.uploaded_files
-
 def main():
-    # Initialize session states
-    if 'executed' not in st.session_state:
-        st.session_state.executed = False
+    # Initialize session state for storing CSV strings and processing state
     if 'csv_strings' not in st.session_state:
         st.session_state.csv_strings = {
             'combined': None,
             'full_segment': None,
             'partial_segment': None
         }
+    
+    if 'branded_count' not in st.session_state:
+        st.session_state.branded_count = 0
+        
+    if 'branded_terms_used' not in st.session_state:
+        st.session_state.branded_terms_used = []
+        
+    if 'has_processed' not in st.session_state:
+        st.session_state.has_processed = False
 
     # Title and subtitle
     st.markdown("# SEMrush Organic Position Combo Tool")
     st.markdown("created by [Jimmy Lange](https://jamesrobertlange.com)", unsafe_allow_html=True)
     
-    # Add explanation and video
-    st.markdown("""
-    This tool combines and analyzes SEMrush Organic Overview data exports to overcome keyword limits. It groups URLs by their final segment (e.g., 'seo-tips' from '/blog/seo-tips') to analyze organic traffic patterns.
-
-    Watch the tutorial for detailed usage instructions:
-    """)
-
-    col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.video('https://www.youtube.com/watch?v=s0nKPfwsm6A')
-    # Initialize variables
+    # Initialize these variables to None at the start
     top_pages_sem = None
     full_segment_analysis = None
     partial_segment_analysis = None
@@ -246,17 +344,12 @@ def main():
     with st.sidebar:
         st.header("Settings")
         
-        # Add reset button to sidebar
-        st.sidebar.markdown("### Reset Tool")
-        if st.sidebar.button("🔄 Reset All", type="primary"):
-            reset_app()
-            st.rerun()
-
         # File upload with size limit warning
         st.markdown("""
             ### Upload CSV Files
             
             ⚠️ **File Size Limits**
+            - Maximum file size: 200MB per file
             - Larger files may cause performance issues
         """)
         
@@ -268,15 +361,13 @@ def main():
         )
         
         # Check file sizes
-        files_valid = True
         if uploaded_files:
             for file in uploaded_files:
                 file_size = file.size / (1024 * 1024)  # Convert to MB
                 if file_size > 200:
-                    st.error(f"⚠️ {file.name} is {file_size:.1f}MB. Files over 200MB may fail to process.")
-                    files_valid = False
+                    st.error(f"⚠️ {file.name} is {file_size:.1f}MB. Files over 200MB may fail to process on Streamlit Community Cloud.")
         
-
+        # Add segment toggle in sidebar
         st.sidebar.markdown("### Output Options")
         include_segments = st.sidebar.checkbox(
             "Include Segments in Combined Output",
@@ -295,26 +386,35 @@ def main():
             placeholder="e.g., client name, client, client"
         ).strip()
         branded_terms = branded_input.lower().split(',') if branded_input else []
-
-    # Execute button (only show if files are uploaded)
-    if uploaded_files:
-        st.markdown('<div class="execute-button">', unsafe_allow_html=True)
-        execute_button = st.button("▶️ Execute Analysis", type="primary")
-        st.markdown('</div>', unsafe_allow_html=True)
         
-        if execute_button and files_valid:
-            st.session_state.executed = True
-            
-        if not files_valid:
-            st.error("Please fix file size issues before executing.")
-    else:
-        st.info("Please upload CSV files to begin")
-        st.session_state.executed = False
+        # Process button instead of automatic processing
+        process_button = st.button(
+            "Process Files", 
+            type="primary",
+            help="Click to process files with current settings",
+            key="process_button"
+        )
+        
+        # Display current configuration
+        st.sidebar.markdown("### Current Configuration")
+        st.sidebar.write(f"Max Position: {max_position}")
+        if branded_terms:
+            st.sidebar.write(f"Branded Terms: {', '.join(branded_terms)}")
+            if st.session_state.has_processed:
+                st.sidebar.write(f"Branded Keywords Found: {st.session_state.branded_count}")
+        
+        # Reset button
+        if st.sidebar.button("Reset All"):
+            st.session_state.clear()
+            st.experimental_rerun()
 
-    # Only process if executed is True
-    if st.session_state.executed and files_valid:
+    # Only process files if the process button is clicked
+    if uploaded_files and process_button:
         with st.spinner("Processing files..."):
             try:
+                # Set processing flag
+                st.session_state.has_processed = True
+                
                 # Process the files
                 top_pages_sem, full_segment_analysis, partial_segment_analysis = process_csv_files(
                     uploaded_files,
@@ -323,12 +423,26 @@ def main():
                     include_segments
                 )
 
+                # Debug info - print counts
+                st.success(f"Total rows processed: {len(top_pages_sem)}")
+                
+                # Add debug text for segment counts
+                with st.expander("Debug Info (click to expand)"):
+                    if 'occurrences' in full_segment_analysis.columns:
+                        st.text(f"Segments with >5 occurrences: {len(full_segment_analysis[full_segment_analysis['occurrences'] > 5])}")
+                        st.text(f"Segments with 5-50 occurrences: {len(full_segment_analysis[(full_segment_analysis['occurrences'] > 5) & (full_segment_analysis['occurrences'] <= 50)])}")
+                        st.text(f"Segments total: {len(full_segment_analysis)}")
+                    else:
+                        st.text("No occurrences column found in segment analysis")
+                        
+                    if branded_terms:
+                        st.text(f"Branded keywords used in processing: {', '.join(st.session_state.branded_terms_used)}")
+                        st.text(f"Branded keywords found: {st.session_state.branded_count}")
+
                 # Convert DataFrames to CSV strings once and store in session state
                 st.session_state.csv_strings['combined'] = convert_df_to_csv(top_pages_sem)
                 st.session_state.csv_strings['full_segment'] = convert_df_to_csv(full_segment_analysis)
                 st.session_state.csv_strings['partial_segment'] = convert_df_to_csv(partial_segment_analysis)
-                
-                st.success(f"Total rows processed: {len(top_pages_sem)}")
 
                 # Display results in tabs
                 tab1, tab2, tab3 = st.tabs([
@@ -348,6 +462,8 @@ def main():
                     - Total traffic for each segment
                     - Number of times the segment appears
                     - Top 3 keywords and URLs for each segment
+                    - Average CPC for each segment
+                    - Aggregated trend data (when available)
                     Sorted by total traffic.
                     """)
                     st.dataframe(full_segment_analysis.head())
@@ -362,7 +478,7 @@ def main():
                     Excludes very high-volume (>50 occurrences) and very low-volume (<5 occurrences) segments.
                     """)
                     if partial_segment_analysis.empty:
-                        st.info("No segments match the partial analysis criteria")
+                        st.info("No segments match the partial analysis criteria (5-50 occurrences)")
                     else:
                         st.dataframe(partial_segment_analysis.head())
 
@@ -430,7 +546,17 @@ def main():
 
             except Exception as e:
                 st.error(f"An error occurred: {str(e)}")
-                st.session_state.executed = False
+                # Add more detailed error information
+                st.exception(e)
+    elif uploaded_files:
+        # Show instructions when files are uploaded but not processed
+        st.info("Files uploaded. Click 'Process Files' in the sidebar when you're ready to analyze the data.")
+    else:
+        st.info("Please upload CSV files to begin processing")
+        
+    # Show configuration reminders if files are uploaded but not processed
+    if uploaded_files and not process_button and not st.session_state.has_processed:
+        st.warning("⚠️ Remember to set your maximum position and branded terms before processing")
 
 if __name__ == "__main__":
     main()

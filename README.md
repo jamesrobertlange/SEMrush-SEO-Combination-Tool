@@ -2,6 +2,13 @@
 
 A Streamlit web application for processing and analyzing SEO data from multiple SEMrush CSV exports. This app combines data sources, performs segment analysis, and provides downloadable reports.
 
+## Roadmap
+- Update color button for executing code
+- make sure reset button exists for restarting code
+- Remove redundant insights during combination
+- Test streamlit free limits to ensure maximum
+- update site segmenting and add in options for api keys for smart categorization and branded terms
+
 ## Features
 
 - Upload and process multiple SEMrush CSV files simultaneously
